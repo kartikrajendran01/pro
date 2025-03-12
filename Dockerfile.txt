@@ -1,0 +1,58 @@
+# syntax = docker/dockerfile:experimental
+
+FROM databricksruntime/dbfsfuse:12.2-LTS
+
+# Common setup for all models
+RUN apt-get update && \
+    apt-get install -y software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get install -y \
+        gnupg2 \
+        curl \
+        unixodbc \
+        unixodbc-dev \
+        git \
+        openssh-server \
+        python3.9-venv \
+        python3.9-dev \
+        libxml2 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Microsoft ODBC Driver
+RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
+    curl https://packages.microsoft.com/config/ubuntu/18.04/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
+    apt-get update && \
+    ACCEPT_EULA=Y apt-get install -y msodbcsql17
+
+# Install R
+RUN DEBIAN_FRONTEND="noninteractive" apt-get install -y r-base
+
+# Create a writable directory for R packages
+RUN mkdir -p /usr/local/lib/R/site-library && \
+    chmod -R 777 /usr/local/lib/R/site-library
+
+# Install required R packages
+RUN R -e "install.packages(c('magrittr', 'rlang'), lib='/usr/local/lib/R/site-library', dependencies=TRUE)"
+RUN R -e "install.packages('https://cran.r-project.org/src/contrib/Archive/purrr/purrr_0.3.4.tar.gz', repos=NULL, type='source', lib='/usr/local/lib/R/site-library')"
+RUN R -e "install.packages(c('tidyverse', 'vroom', 'cpp11', 'tzdb', 'readr', 'dplyr', 'rpart', 'gtools', 'lubridate', 'randomForest', 'caret', 'rpart.plot', 'rattle', 'RColorBrewer', 'hwriterPlus', 'htmltools', 'Rserve'), repos='http://cran.us.r-project.org')"
+
+# Model arguments setup
+ARG PYTHON_VERSION=3.9
+ARG MODEL_NAME=drm-fl
+
+# Python environment setup
+RUN python$PYTHON_VERSION -m venv /my-envs/drm
+ENV PATH="/my-envs/drm/bin:$PATH"
+
+# Set working directory
+WORKDIR /usr/src/app/$MODEL_NAME
+
+# Authorize SSH Host for Git repo pip installation
+RUN mkdir -p -m0600 /root/.ssh && ssh-keyscan github.com >> /root/.ssh/known_hosts
+
+# Copy and install Python dependencies
+COPY requirements.txt ./
+RUN --mount=type=ssh,id=default pip install -r requirements.txt
+
+# Create a user with sudo privileges (Warning: Root privileges inside the container)
+RUN useradd --create-home --shell /bin/bash --groups sudo ubuntu
